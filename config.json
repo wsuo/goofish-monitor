@@ -12,7 +12,7 @@
   },
   {
     "task_name": "DJI Mini 3 Pro",
-    "enabled": true,
+    "enabled": false,
     "keyword": "mini 3 pro",
     "max_pages": 3,
     "personal_only": true,

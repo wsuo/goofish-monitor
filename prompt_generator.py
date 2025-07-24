@@ -48,20 +48,48 @@ async def call_gemini_api_prompt(contents):
         "contents": contents
     }
     
-    timeout = aiohttp.ClientTimeout(total=60)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(url, headers=headers, json=payload) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise aiohttp.ClientResponseError(
-                    request_info=response.request_info,
-                    history=response.history,
-                    status=response.status,
-                    message=f"Gemini API 错误: {error_text}"
-                )
-            
-            result = await response.json()
-            return result
+    # 配置连接器以处理代理和 SSL
+    connector = aiohttp.TCPConnector(
+        use_dns_cache=False,
+        ttl_dns_cache=300,
+        limit=100,
+        limit_per_host=30,
+        ssl=False  # 在有代理的情况下禁用SSL验证
+    )
+    
+    timeout = aiohttp.ClientTimeout(total=60, connect=30)
+    
+    # 检查环境变量中的代理设置
+    proxy = None
+    if 'all_proxy' in os.environ:
+        proxy = os.environ['all_proxy']
+    elif 'ALL_PROXY' in os.environ:
+        proxy = os.environ['ALL_PROXY']
+    
+    async with aiohttp.ClientSession(
+        connector=connector,
+        timeout=timeout,
+        trust_env=True  # 自动使用环境变量中的代理设置
+    ) as session:
+        try:
+            async with session.post(url, headers=headers, json=payload, proxy=proxy) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise aiohttp.ClientResponseError(
+                        request_info=response.request_info,
+                        history=response.history,
+                        status=response.status,
+                        message=f"Gemini API 错误 (状态码: {response.status}): {error_text}"
+                    )
+                
+                result = await response.json()
+                return result
+        except aiohttp.ClientConnectorError as e:
+            raise aiohttp.ClientConnectionError(f"Gemini API 连接失败: {str(e)}. 请检查网络连接和代理设置。")
+        except asyncio.TimeoutError as e:
+            raise asyncio.TimeoutError(f"Gemini API 请求超时: {str(e)}")
+        except Exception as e:
+            raise aiohttp.ClientError(f"Gemini API 调用失败: {str(e)}")
 
 # The meta-prompt to instruct the AI
 META_PROMPT_TEMPLATE = """

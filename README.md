@@ -1,14 +1,17 @@
 # 闲鱼智能监控机器人
 
+> **项目说明**: 本项目基于 [dingyufei615/ai-goofish-monitor](https://github.com/dingyufei615/ai-goofish-monitor) 进行改进，添加了 Gemini API 支持、Claude Code 开发支持等增强功能。
+
 一个基于 Playwright 和AI过滤分析的闲鱼多任务实时监控与智能分析工具，配备了功能完善的 Web 管理界面。
 
 ## ✨ 项目亮点
 
+- **多模型AI支持**: 支持 OpenAI API 和 Gemini API，可根据需要灵活选择AI模型。
 - **可视化Web界面**: 提供完整的Web UI，支持任务的可视化管理、AI标准在线编辑、运行日志实时查看和结果筛选浏览，无需直接操作命令行和配置文件。
 - **AI驱动的任务创建**: 只需用自然语言描述你的购买需求，即可一键创建包含复杂筛选逻辑的全新监控任务。
 - **多任务并发**: 通过 `config.json` 同时监控多个关键词，各任务独立运行，互不干扰。
 - **实时流式处理**: 发现新商品后，立即进入分析流程，告别批处理延迟。
-- **深度AI分析**: 集成多模态大语言模型（如 GPT-4o），结合商品图文和卖家画像进行深度分析，精准筛选。
+- **深度AI分析**: 集成多模态大语言模型（如 GPT-4o、Gemini-2.5-Flash 等），结合商品图文和卖家画像进行深度分析，精准筛选。
 - **高度可定制**: 每个监控任务均可配置独立的关键词、价格范围、筛选条件和AI分析指令 (Prompt)。
 - **即时通知**: 通过 [ntfy.sh](https://ntfy.sh/) 将符合AI推荐的商品立即推送到你的手机或桌面。
 - **健壮的反爬策略**: 模拟真人操作，包含多种随机延迟和用户行为，提高稳定性。
@@ -31,8 +34,8 @@ ntf通知截图
 
 克隆本项目到本地:
 ```bash
-git clone https://github.com/dingyufei615/ai-goofish-monitor
-cd ai-goofish-monitor
+git clone https://github.com/wsuo/goofish-monitor
+cd goofish-monitor
 ```
 
 安装所需的Python依赖：
@@ -43,6 +46,8 @@ pip install -r requirements.txt
 ### 第 2 步: 基础配置
 
 1.  **配置环境变量**: 在项目根目录创建一个 `.env` 文件，并填入以下配置信息。
+
+    **OpenAI API 配置示例:**
     ```env
     # --- AI 模型相关配置 ---
     # 模型的API Key。
@@ -50,10 +55,27 @@ pip install -r requirements.txt
     
     # 模型的API接口地址。这里需要填写服务商提供的、兼容OpenAI格式的API地址，基本所有模型都有提供OpenAI格式兼容的接口
     # 可查阅你使用的大模型API文档，如格式为 https://xx.xx.com/v1/chat/completions 则OPENAI_BASE_URL只需要填入前半段 https://xx.xx.com/v1/
-    OPENAI_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai/"
+    OPENAI_BASE_URL="https://api.openai.com/v1/"
     
     # 使用的模型名称，模型需要支持图片上传。
-    OPENAI_MODEL_NAME="gemini-2.5-pro"
+    OPENAI_MODEL_NAME="gpt-4o"
+    ```
+
+    **Gemini API 配置示例:**
+    ```env
+    # --- AI 模型相关配置 ---
+    # Gemini API Key
+    OPENAI_API_KEY="your_gemini_api_key"
+    
+    # Gemini API 基础地址
+    OPENAI_BASE_URL="https://generativelanguage.googleapis.com/v1beta"
+    
+    # 使用的 Gemini 模型名称，支持多模态
+    OPENAI_MODEL_NAME="gemini-2.5-flash"
+    ```
+
+    **其他配置:**
+    ```env
 
     # ntfy 通知服务配置
     NTFY_TOPIC_URL="https://ntfy.sh/your-topic-name" # 替换为你的 ntfy 主题 URL
@@ -108,8 +130,8 @@ python web_server.py
 
 2.  **克隆项目并配置**:
     ```bash
-    git clone https://github.com/dingyufei615/ai-goofish-monitor
-    cd ai-goofish-monitor
+    git clone https://github.com/wsuo/goofish-monitor
+    cd goofish-monitor
     ```
 
 3.  **创建 `.env` 文件**: 参考 **[快速开始](#-快速开始-web-ui-推荐)** 部分的说明，在项目根目录创建并填写 `.env` 文件。
@@ -310,4 +332,4 @@ graph TD
 - 请遵守闲鱼的用户协议和robots.txt规则，不要进行过于频繁的请求，以免对服务器造成负担或导致账号被限制。
 - 本项目仅供学习和技术研究使用，请勿用于非法用途。
 
-[![Star History Chart](https://api.star-history.com/svg?repos=dingyufei615/ai-goofish-monitor&type=Date)](https://star-history.com/#dingyufei615/ai-goofish-monitor&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=wsuo/goofish-monitor&type=Date)](https://star-history.com/#wsuo/goofish-monitor&Date)

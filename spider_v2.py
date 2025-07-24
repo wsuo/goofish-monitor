@@ -8,13 +8,14 @@ import random
 import base64
 import re
 import time
+import aiohttp
 from datetime import datetime
 from functools import wraps
 from urllib.parse import urlencode
 
 import requests
 from dotenv import load_dotenv
-from openai import AsyncOpenAI, APIStatusError
+from openai import AsyncOpenAI, APIStatusError, APITimeoutError
 from playwright.async_api import async_playwright, Response, TimeoutError as PlaywrightTimeoutError
 from requests.exceptions import HTTPError
 
@@ -39,11 +40,23 @@ RUN_HEADLESS = os.getenv("RUN_HEADLESS", "true").lower() != "false"
 if not all([BASE_URL, MODEL_NAME]):
     sys.exit("错误：请确保在 .env 文件中完整设置了 OPENAI_BASE_URL 和 OPENAI_MODEL_NAME。(OPENAI_API_KEY 对于某些服务是可选的)")
 
-# 初始化 OpenAI 客户端
-try:
-    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
-except Exception as e:
-    sys.exit(f"初始化 OpenAI 客户端时出错: {e}")
+# 判断是否使用 Gemini API
+USE_GEMINI_API = "generativelanguage.googleapis.com" in BASE_URL
+
+if USE_GEMINI_API:
+    print("检测到 Gemini API 配置，使用 Gemini 兼容模式")
+    # Gemini API 不需要初始化 OpenAI 客户端
+    client = None
+else:
+    # 初始化 OpenAI 客户端（增加超时设置）
+    try:
+        client = AsyncOpenAI(
+            api_key=API_KEY, 
+            base_url=BASE_URL,
+            timeout=120.0  # 设置120秒超时，适合处理多图片的AI分析
+        )
+    except Exception as e:
+        sys.exit(f"初始化 OpenAI 客户端时出错: {e}")
 
 # 定义目录和文件名
 IMAGE_SAVE_DIR = "images"
@@ -404,10 +417,12 @@ def retry_on_failure(retries=3, delay=5):
             for i in range(retries):
                 try:
                     return await func(*args, **kwargs)
-                except (APIStatusError, HTTPError) as e:
-                    print(f"函数 {func.__name__} 第 {i + 1}/{retries} 次尝试失败，发生HTTP错误。")
+                except (APIStatusError, APITimeoutError, HTTPError, aiohttp.ClientError) as e:
+                    print(f"函数 {func.__name__} 第 {i + 1}/{retries} 次尝试失败，发生HTTP/API错误。")
                     if hasattr(e, 'status_code'):
                         print(f"  - 状态码 (Status Code): {e.status_code}")
+                    elif hasattr(e, 'status'):
+                        print(f"  - 状态码 (Status): {e.status}")
                     if hasattr(e, 'response') and hasattr(e.response, 'text'):
                         response_text = e.response.text
                         print(
@@ -564,6 +579,37 @@ async def send_ntfy_notification(product_data, reason):
         print(f"   -> 发送企业微信通知时发生未知错误: {e}")
         raise
 
+async def call_gemini_api(contents):
+    """调用 Gemini API 的函数"""
+    url = f"{BASE_URL}/models/{MODEL_NAME}:generateContent"
+    
+    headers = {
+        'Content-Type': 'application/json',
+        'X-goog-api-key': API_KEY
+    }
+    
+    payload = {
+        "contents": contents,
+        "generationConfig": {
+            "response_mime_type": "application/json"
+        }
+    }
+    
+    timeout = aiohttp.ClientTimeout(total=120)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(url, headers=headers, json=payload) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise aiohttp.ClientResponseError(
+                    request_info=response.request_info,
+                    history=response.history,
+                    status=response.status,
+                    message=f"Gemini API 错误: {error_text}"
+                )
+            
+            result = await response.json()
+            return result
+
 @retry_on_failure(retries=5, delay=10)
 async def get_ai_analysis(product_data, image_paths=None, prompt_text=""):
     """将完整的商品JSON数据和所有图片发送给 AI 进行分析（异步）。"""
@@ -587,24 +633,58 @@ async def get_ai_analysis(product_data, image_paths=None, prompt_text=""):
 ```json
     {product_details_json}
 """
-    user_content_list = [{"type": "text", "text": combined_text_prompt}]
 
-    if image_paths:
-        for path in image_paths:
-            base64_image = encode_image_to_base64(path)
-            if base64_image:
-                user_content_list.append(
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
+    if USE_GEMINI_API:
+        # 构建 Gemini API 格式的请求
+        parts = [{"text": combined_text_prompt}]
+        
+        # 添加图片到 parts
+        if image_paths:
+            for path in image_paths:
+                base64_image = encode_image_to_base64(path)
+                if base64_image:
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": base64_image
+                        }
+                    })
+        
+        contents = [{"parts": parts}]
+        
+        # 调用 Gemini API
+        response = await call_gemini_api(contents)
+        
+        # 解析 Gemini 响应
+        if "candidates" in response and len(response["candidates"]) > 0:
+            candidate = response["candidates"][0]
+            if "content" in candidate and "parts" in candidate["content"]:
+                ai_response_content = candidate["content"]["parts"][0]["text"]
+            else:
+                raise ValueError("Gemini API 响应格式错误：未找到内容")
+        else:
+            raise ValueError("Gemini API 响应格式错误：未找到候选结果")
+    
+    else:
+        # 使用 OpenAI API
+        user_content_list = [{"type": "text", "text": combined_text_prompt}]
 
-    messages = [{"role": "user", "content": user_content_list}]
+        if image_paths:
+            for path in image_paths:
+                base64_image = encode_image_to_base64(path)
+                if base64_image:
+                    user_content_list.append(
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
 
-    response = await client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=messages,
-        response_format={"type": "json_object"}
-    )
+        messages = [{"role": "user", "content": user_content_list}]
 
-    ai_response_content = response.choices[0].message.content
+        response = await client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            response_format={"type": "json_object"}
+        )
+        
+        ai_response_content = response.choices[0].message.content
 
     try:
         return json.loads(ai_response_content)

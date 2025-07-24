@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import aiofiles
+import aiohttp
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
@@ -17,11 +18,50 @@ MODEL_NAME = os.getenv("OPENAI_MODEL_NAME")
 if not all([BASE_URL, MODEL_NAME]):
     raise ValueError("错误：请确保在 .env 文件中完整设置了 OPENAI_BASE_URL 和 OPENAI_MODEL_NAME。(OPENAI_API_KEY 对于某些服务是可选的)")
 
-# Initialize OpenAI client
-try:
-    client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
-except Exception as e:
-    raise RuntimeError(f"初始化 OpenAI 客户端时出错: {e}") from e
+# 判断是否使用 Gemini API
+USE_GEMINI_API = "generativelanguage.googleapis.com" in BASE_URL
+
+if USE_GEMINI_API:
+    print("检测到 Gemini API 配置，使用 Gemini 兼容模式")
+    client = None
+else:
+    # Initialize OpenAI client
+    try:
+        client = AsyncOpenAI(
+            api_key=API_KEY, 
+            base_url=BASE_URL,
+            timeout=60.0  # 设置60秒超时，适合prompt生成任务
+        )
+    except Exception as e:
+        raise RuntimeError(f"初始化 OpenAI 客户端时出错: {e}") from e
+
+async def call_gemini_api_prompt(contents):
+    """为 prompt_generator 调用 Gemini API 的函数"""
+    url = f"{BASE_URL}/models/{MODEL_NAME}:generateContent"
+    
+    headers = {
+        'Content-Type': 'application/json',
+        'X-goog-api-key': API_KEY
+    }
+    
+    payload = {
+        "contents": contents
+    }
+    
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(url, headers=headers, json=payload) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise aiohttp.ClientResponseError(
+                    request_info=response.request_info,
+                    history=response.history,
+                    status=response.status,
+                    message=f"Gemini API 错误: {error_text}"
+                )
+            
+            result = await response.json()
+            return result
 
 # The meta-prompt to instruct the AI
 META_PROMPT_TEMPLATE = """
@@ -70,16 +110,33 @@ async def generate_criteria(user_description: str, reference_file_path: str) -> 
 
     print("正在调用AI生成新的分析标准，请稍候...")
     try:
-        response = await client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5, # Lower temperature for more predictable structure
-        )
-        generated_text = response.choices[0].message.content
+        if USE_GEMINI_API:
+            # 使用 Gemini API
+            contents = [{"parts": [{"text": prompt}]}]
+            response = await call_gemini_api_prompt(contents)
+            
+            # 解析 Gemini 响应
+            if "candidates" in response and len(response["candidates"]) > 0:
+                candidate = response["candidates"][0]
+                if "content" in candidate and "parts" in candidate["content"]:
+                    generated_text = candidate["content"]["parts"][0]["text"]
+                else:
+                    raise ValueError("Gemini API 响应格式错误：未找到内容")
+            else:
+                raise ValueError("Gemini API 响应格式错误：未找到候选结果")
+        else:
+            # 使用 OpenAI API
+            response = await client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5, # Lower temperature for more predictable structure
+            )
+            generated_text = response.choices[0].message.content
+            
         print("AI已成功生成内容。")
         return generated_text.strip()
     except Exception as e:
-        print(f"调用 OpenAI API 时出错: {e}")
+        print(f"调用 AI API 时出错: {e}")
         raise e
 
 
